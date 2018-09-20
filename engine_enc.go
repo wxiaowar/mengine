@@ -2,10 +2,10 @@ package mengine
 
 import (
 	"fmt"
+	"github.com/wxiaowar/mengine/json"
 	"io/ioutil"
 	"net/http"
 	"time"
-	"mengine/json"
 )
 
 func (eg *Engine) encHandle(h HFunc, w http.ResponseWriter, r *http.Request) {
@@ -27,7 +27,7 @@ func (eg *Engine) encHandle(h HFunc, w http.ResponseWriter, r *http.Request) {
 
 	decbts, e := eg.Descrypt(ctx)
 	if e != nil {
-		eg.encfail(w, "check descrypt error", r.URL.Path, e.Error())
+		eg.encfail(w, fmt.Sprintf("check descrypt error %v", e), r.URL.Path)
 		return
 	}
 
@@ -68,9 +68,9 @@ func (eg *Engine) handleEnc(h HFunc, ctx *Context, w http.ResponseWriter) {
 		res["detail"] = detail
 	}
 
-	rbts, e := json.Marshal(res)
-	if e != nil {
-		eg.encfail(w, fmt.Sprint("marshal write error : %v", e), ctx.Path())
+	rbts, err := json.Marshal(res)
+	if err != nil {
+		eg.encfail(w, fmt.Sprint("marshal write error : %v", err), ctx.Path())
 		return
 	}
 
@@ -81,16 +81,28 @@ func (eg *Engine) handleEnc(h HFunc, ctx *Context, w http.ResponseWriter) {
 
 	rtbts := eg.Encrypt(rbts)
 
-	_, e = w.Write(rtbts)
-	if e != nil {
-		eg.Notice("ok", -1, ctx.RemoteAddr(), ctx.RequestURI(), ctx.GetAuth(), string(ctx.BodyRaw), detail, string(rbts), fmt.Sprintf("write res error : %v", e))
+	_, err = w.Write(rtbts)
+	if err != nil {
+		eg.Error().Str("status", "ok").
+			Int("code", -1).
+			Str("remote", ctx.RemoteAddr()).
+			Str("uri", ctx.RequestURI()).
+			Str("auth", ctx.GetAuth()).
+			Str("body", string(ctx.BodyRaw)).
+			Str("detail", detail).Msg(err.Error())
 		return
 	}
 
-	eg.Notice("ok", 0, ctx.RemoteAddr(), ctx.RequestURI(), ctx.GetAuth(), string(ctx.BodyRaw), detail, string(rbts))
+	eg.Info().Str("status", "ok").
+		Int("code", 0).
+		Str("remote", ctx.RemoteAddr()).
+		Str("uri", ctx.RequestURI()).
+		Str("auth", ctx.GetAuth()).
+		Str("body", string(ctx.BodyRaw)).
+		Str("return", string(rbts))
 }
 
-func (eg *Engine) encfail(w http.ResponseWriter, detail, path string, args ...interface{}) {
+func (eg *Engine) encfail(w http.ResponseWriter, detail, path string) {
 	result := map[string]interface{}{
 		"code": -1,
 		"msg":  "internal",
@@ -100,7 +112,10 @@ func (eg *Engine) encfail(w http.ResponseWriter, detail, path string, args ...in
 		result["detail"] = detail
 	}
 
-	eg.Notice("fail", -1, path, detail, args)
+	eg.Error().Str("status", "fail").
+		Int("code", -1).
+		Str("path", path).Str("detail", detail)
+
 	res, _ := json.Marshal(result)
 	if eg.Encrypt != nil {
 		res = eg.Encrypt(res)

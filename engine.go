@@ -14,8 +14,9 @@ package mengine
 import (
 	oscontext "context"
 	"fmt"
+	"github.com/wxiaowar/mengine/json"
+	"github.com/wxiaowar/mlog"
 	"io/ioutil"
-	"mengine/json"
 	"net/http"
 	"time"
 )
@@ -35,16 +36,16 @@ type EngionOption struct {
 type Engine struct {
 	*EngionOption
 	Router
-	ELog
+	*mlog.MLog
 	svr *http.Server
 }
 
 //
-func NewEngine(opt *EngionOption, r Router, log ELog) *Engine {
+func NewEngine(opt *EngionOption, log *mlog.MLog, r Router) *Engine {
 	eg := &Engine{
 		EngionOption: opt,
+		MLog:         log,
 		Router:       r,
-		ELog:         log,
 	}
 
 	// TODO pool reduice gc count
@@ -67,7 +68,7 @@ func (eg *Engine) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	h, b := eg.Rout(req.URL.Path)
 	if !b {
-		eg.comfail(w, fmt.Sprintf("invalid path %v", req.URL.Path), req.URL.Path)
+		eg.comfail(w, "invalid path", req.URL.Path)
 		return
 	}
 
@@ -86,7 +87,7 @@ func (eg *Engine) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		break
 
 	default:
-		eg.comfail(w, fmt.Sprintf("invalid itype"), req.URL.Path)
+		eg.comfail(w, "invalid itype", req.URL.Path)
 	}
 }
 
@@ -158,7 +159,7 @@ func (eg *Engine) trustHandle(h HFunc, w http.ResponseWriter, r *http.Request) {
 	}
 
 	if eg.CheckWhiteList == nil { // 本地白名单检测
-		eg.comfail(w, "check white handle nil", r.URL.Path, r.RemoteAddr)
+		eg.comfail(w, "check white handle nil", r.URL.Path)
 		return
 	}
 
@@ -175,7 +176,7 @@ func (eg *Engine) trustHandle(h HFunc, w http.ResponseWriter, r *http.Request) {
 	}
 
 	if e = eg.CheckWhiteList(ctx); e != nil {
-		eg.authfail(w, "check white error", r.URL.Path, r.RemoteAddr, e.Error())
+		eg.authfail(w, fmt.Sprintf("check white error %v", e), r.URL.Path)
 		return
 	}
 
@@ -186,7 +187,7 @@ func (eg *Engine) trustHandle(h HFunc, w http.ResponseWriter, r *http.Request) {
 func (eg *Engine) itgHandle(h HFunc, w http.ResponseWriter, r *http.Request) {
 	bts, bmap, e := readbody(r)
 	if e != nil {
-		eg.comfail(w, fmt.Sprint("readbody error %v", e), r.URL.Path)
+		eg.comfail(w, fmt.Sprintf("readbody error %v", e), r.URL.Path)
 		return
 	}
 
@@ -203,7 +204,7 @@ func (eg *Engine) itgHandle(h HFunc, w http.ResponseWriter, r *http.Request) {
 	}
 
 	if e := eg.CheckIntegrity(ctx); e != nil {
-		eg.authfail(w, "invalid integrity msg", r.URL.Path, e.Error())
+		eg.authfail(w, fmt.Sprintf("invalid integrity msg %v", e), r.URL.Path)
 		return
 	}
 
@@ -235,30 +236,42 @@ func (eg *Engine) handle(h HFunc, ctx *Context, w http.ResponseWriter) {
 		res["detail"] = detail
 	}
 
-	rbts, e := json.Marshal(res)
-	if e != nil {
-		eg.comfail(w, fmt.Sprint("marshal write error : %v", e), ctx.Path())
+	rbts, err := json.Marshal(res)
+	if err != nil {
+		eg.comfail(w, fmt.Sprint("marshal write error : %v", err), ctx.Path())
 		return
 	}
 
-	_, e = w.Write(rbts)
-	if e != nil {
-		eg.Notice("ok", -1, ctx.RemoteAddr(), ctx.RequestURI(), ctx.GetAuth(), string(ctx.BodyRaw), detail, string(rbts), fmt.Sprintf("write res error : %v", e))
+	_, err = w.Write(rbts)
+	if err != nil {
+		eg.Error().Str("status", "ok").
+			Int("code", -1).
+			Str("remote", ctx.RemoteAddr()).
+			Str("uri", ctx.RequestURI()).
+			Str("auth", ctx.GetAuth()).
+			Str("body", string(ctx.BodyRaw)).
+			Str("detail", detail).Msg(err.Error())
 		return
 	}
 
-	eg.Notice("ok", 0, ctx.RemoteAddr(), ctx.RequestURI(), ctx.GetAuth(), string(ctx.BodyRaw), detail, string(rbts))
+	eg.Info().Str("status", "ok").
+		Int("code", 0).
+		Str("remote", ctx.RemoteAddr()).
+		Str("uri", ctx.RequestURI()).
+		Str("auth", ctx.GetAuth()).
+		Str("body", string(ctx.BodyRaw)).
+		Str("return", string(rbts))
 }
 
-func (eg *Engine) authfail(w http.ResponseWriter, detail, path string, args ...interface{}) {
-	eg.fail(w, -2, detail, path, args...)
+func (eg *Engine) authfail(w http.ResponseWriter, detail, path string) {
+	eg.fail(w, -2, detail, path)
 }
 
-func (eg *Engine) comfail(w http.ResponseWriter, detail, path string, args ...interface{}) {
-	eg.fail(w, -1, detail, path, args...)
+func (eg *Engine) comfail(w http.ResponseWriter, detail, path string) {
+	eg.fail(w, -1, detail, path)
 }
 
-func (eg *Engine) fail(w http.ResponseWriter, code int32, detail, path string, args ...interface{}) {
+func (eg *Engine) fail(w http.ResponseWriter, code int, detail, path string) {
 	result := map[string]interface{}{
 		"code": code,
 		"msg":  "internal",
@@ -268,7 +281,9 @@ func (eg *Engine) fail(w http.ResponseWriter, code int32, detail, path string, a
 		result["detail"] = detail
 	}
 
-	eg.Notice("fail", code, path, detail, args)
+	eg.Error().Str("status", "fail").
+		Int("code", code).
+		Str("path", path).Str("detail", detail)
 	res, _ := json.Marshal(result)
 	w.Write(res)
 }
